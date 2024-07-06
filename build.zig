@@ -9,20 +9,50 @@ pub fn build(b: *std.Build) void {
     });
     const zgrad_module = zgrad_dependency.module("zgrad");
 
-    const exe = b.addExecutable(.{
-        .name = "mnist-classifier",
-        .root_source_file = .{ .path = "src/main.zig" },
+    const train = b.addExecutable(.{
+        .name = "train",
+        .root_source_file = .{ .path = "src/train.zig" },
         .target = target,
         .optimize = .ReleaseSafe,
     });
 
-    exe.root_module.addImport("zgrad", zgrad_module);
+    train.root_module.addImport("zgrad", zgrad_module);
 
-    b.installArtifact(exe);
+    b.installArtifact(train);
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
+    const train_run_cmd = b.addRunArtifact(train);
 
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    const train_run_step = b.step("train", "Train the classifier");
+    train_run_step.dependOn(&train_run_cmd.step);
+
+    const interact = b.addExecutable(.{
+        .name = "interact",
+        .root_source_file = b.path("src/interact.zig"),
+        .target = target,
+    });
+
+    interact.root_module.addImport("zgrad", zgrad_module);
+    interact.addCSourceFile(.{ .file = b.path("deps/src/raygui_implementation.c") });
+
+    inline for (.{
+        "raylib",
+        "GL",
+        "m",
+        "pthread",
+        "dl",
+        "rt",
+        "X11",
+    }) |name|
+        interact.linkSystemLibrary(name);
+
+    interact.addLibraryPath(b.path("deps/lib"));
+    interact.addIncludePath(b.path("deps/include"));
+    interact.addRPath(b.path("deps/lib"));
+
+    b.installArtifact(interact);
+
+    const interact_run_cmd = b.addRunArtifact(interact);
+
+    const interact_run_step = b.step("interact", "Interact with the classifier");
+    interact_run_step.dependOn(&interact_run_cmd.step);
 }
