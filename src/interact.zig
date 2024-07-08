@@ -7,8 +7,10 @@ const c = @cImport({
 const IdxUbyte = @import("idxubyte.zig");
 const zgrad = @import("zgrad");
 
-const pixel_size = 20;
-const window_height = 28 * pixel_size;
+const upsample_factor = 4;
+
+const pixel_size = 5;
+const window_height = upsample_factor * 28 * pixel_size;
 const window_width: comptime_int = @intFromFloat(window_height * 16.0 / 9.0);
 
 const bar_width = (window_width - window_height) / 2;
@@ -37,15 +39,67 @@ pub fn main() !void {
     defer c.CloseWindow();
     c.SetTargetFPS(60);
 
+    const input_image = try allocator.alloc(f32, upsample_factor * upsample_factor * 28 * 28);
+
+    var margins: Margins = undefined;
+
+    var weighted_center: c.Vector2 = undefined;
+    var weight_sum: f32 = undefined;
+
     while (!c.WindowShouldClose()) {
         c.BeginDrawing();
         defer c.EndDrawing();
         c.ClearBackground(c.GetColor(@bitCast(c.GuiGetStyle(c.DEFAULT, c.BACKGROUND_COLOR)))); // Need @bitCast() here as raylib function GetColor() accepts unsigned int but raygui function GuiGetStyle() returns int
 
-        if (updateInputImage(classifier.input.value.entries))
-            classifier.operate();
+        if (updateInputImage(input_image)) blk: {
+            margins.top = upsample_factor * 28;
+            margins.bottom = 0;
+            margins.left = upsample_factor * 28;
+            margins.right = 0;
 
-        drawImage(classifier.input.value.entries);
+            weighted_center = .{ .y = 0, .x = 0 };
+            weight_sum = 0;
+
+            var is_image_empty = true;
+
+            for (input_image, 0..) |pixel_brightness, i| {
+                if (pixel_brightness == 0)
+                    continue;
+
+                is_image_empty = false;
+
+                const y = i / (upsample_factor * 28);
+                const x = i % (upsample_factor * 28);
+
+                if (y < margins.top)
+                    margins.top = y;
+
+                if (y > margins.bottom)
+                    margins.bottom = y;
+
+                if (x < margins.left)
+                    margins.left = x;
+
+                if (x > margins.right)
+                    margins.right = x;
+
+                weighted_center.y += pixel_brightness * @as(f32, @floatFromInt(y));
+                weighted_center.x += pixel_brightness * @as(f32, @floatFromInt(x));
+                weight_sum += pixel_brightness;
+            }
+
+            if (is_image_empty)
+                break :blk;
+
+            weighted_center.x /= weight_sum;
+            weighted_center.y /= weight_sum;
+
+            //cropAndCenterAndResizeInputImage();
+
+            classifier.operate();
+        }
+
+        drawInputImage(input_image, margins);
 
         for (classifier.output.value.entries, 0..) |*entry, i| {
             _ = c.GuiProgressBar(.{
@@ -71,22 +125,36 @@ fn updateInputImage(data: []f32) bool {
 
     const mouse_position = c.GetMousePosition();
     if (c.IsMouseButtonDown(c.MOUSE_BUTTON_LEFT) and mouse_position.x > 0 and mouse_position.x < window_height and mouse_position.y > 0 and mouse_position.y < window_height) {
-        const i = @as(isize, @intFromFloat(mouse_position.y / pixel_size));
-        const j = @as(isize, @intFromFloat(mouse_position.x / pixel_size));
+        const i = @divFloor(mouse_position.y, pixel_size);
+        const j = @divFloor(mouse_position.x, pixel_size);
 
-        const modifiers = [_]isize{ -1, 0, 1 };
+        const radius = 4;
 
-        for (modifiers) |i_modifier| {
-            for (modifiers) |j_modifier| {
-                if (!(i + i_modifier > 0 and i + i_modifier < 28 and j + j_modifier > 0 and j + j_modifier < 28))
+        const offsets = comptime blk: {
+            var ret: [2 * radius - 1]f32 = undefined;
+
+            for (&ret, 0..) |*item, k|
+                item.* = @as(f32, @floatFromInt(k)) - (radius - 1);
+
+            break :blk ret;
+        };
+
+        for (offsets) |i_offset| {
+            for (offsets) |j_offset| {
+                const squared_distance = i_offset * i_offset + j_offset * j_offset;
+                const squared_radius = radius * radius;
+
+                if (!(i + i_offset >= 0 and i + i_offset < upsample_factor * 28 and j + j_offset >= 0 and j + j_offset < upsample_factor * 28) or squared_distance > squared_radius)
                     continue;
 
-                if (data[@intCast(28 * (i + i_modifier) + j + j_modifier)] < 0.25)
-                    data[@intCast(28 * (i + i_modifier) + j + j_modifier)] = 0.25;
+                const new_brightness = 1 - squared_distance / squared_radius;
+
+                const data_index: usize = @intFromFloat(upsample_factor * 28 * (i + i_offset) + j + j_offset);
+
+                if (new_brightness > data[data_index])
+                    data[data_index] = new_brightness;
             }
         }
-
-        data[@intCast(28 * i + j)] = 1;
 
         return true;
     }
@@ -94,16 +162,32 @@ fn updateInputImage(data: []f32) bool {
     return false;
 }
 
-fn drawImage(data: []const f32) void {
-    for (0..28) |i| {
-        for (0..28) |j| {
-            const pixel_brightness: u8 = @intFromFloat(data[28 * i + j] * 255);
+//fn cropAndCenterAndResizeInputImage() !void {
+//}
+
+fn drawInputImage(data: []const f32, margins: Margins) void {
+    c.DrawRectangle(0, 0, window_height, window_height, c.BLACK);
+
+    for (0..upsample_factor * 28) |i| {
+        for (0..upsample_factor * 28) |j| {
+            const pixel_brightness: u8 = @intFromFloat(data[upsample_factor * 28 * i + j] * 255);
+
+            if (i >= margins.top and i <= margins.bottom and j >= margins.left and j <= margins.right)
+                c.DrawRectangle(@intCast(pixel_size * j), @intCast(pixel_size * i), pixel_size, pixel_size, c.LIME);
+
             c.DrawRectangle(@intCast(pixel_size * j), @intCast(pixel_size * i), pixel_size, pixel_size, .{
-                .r = pixel_brightness,
-                .g = pixel_brightness,
-                .b = pixel_brightness,
-                .a = 255,
+                .r = 255,
+                .g = 255,
+                .b = 255,
+                .a = pixel_brightness,
             });
         }
     }
 }
+
+const Margins = struct {
+    top: usize,
+    bottom: usize,
+    left: usize,
+    right: usize,
+};
