@@ -19,6 +19,20 @@ const bar_height = window_height / @as(f32, @floatFromInt(2 * 10));
 const button_width = 2 * bar_height;
 const button_height = bar_height;
 
+const Margin = struct {
+    top: usize,
+    bottom: usize,
+    left: usize,
+    right: usize,
+};
+
+const largest_invalid_margin = Margin{
+    .top = upsample_factor * 28 - 1,
+    .bottom = 0,
+    .left = upsample_factor * 28 - 1,
+    .right = 0,
+};
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -34,72 +48,35 @@ pub fn main() !void {
     };
 
     const classifier = try zgrad.deserialize(zgrad.Sequence(T), allocator, "classifier");
+    @memset(classifier.input.value.entries, 0);
+    classifier.operate();
 
     c.InitWindow(window_width, window_height, "Interact");
     defer c.CloseWindow();
     c.SetTargetFPS(60);
 
     const input_image = try allocator.alloc(f32, upsample_factor * upsample_factor * 28 * 28);
+    @memset(input_image, 0);
 
-    var margins: Margins = undefined;
-
-    var weighted_center: c.Vector2 = undefined;
-    var weight_sum: f32 = undefined;
+    var margin = largest_invalid_margin;
 
     while (!c.WindowShouldClose()) {
         c.BeginDrawing();
         defer c.EndDrawing();
         c.ClearBackground(c.GetColor(@bitCast(c.GuiGetStyle(c.DEFAULT, c.BACKGROUND_COLOR)))); // Need @bitCast() here as raylib function GetColor() accepts unsigned int but raygui function GuiGetStyle() returns int
 
-        if (updateInputImage(input_image)) blk: {
-            margins.top = upsample_factor * 28;
-            margins.bottom = 0;
-            margins.left = upsample_factor * 28;
-            margins.right = 0;
+        if (updateInputImage(input_image)) {
+            @memset(classifier.input.value.entries, 0);
 
-            weighted_center = .{ .y = 0, .x = 0 };
-            weight_sum = 0;
-
-            var is_image_empty = true;
-
-            for (input_image, 0..) |pixel_brightness, i| {
-                if (pixel_brightness == 0)
-                    continue;
-
-                is_image_empty = false;
-
-                const y = i / (upsample_factor * 28);
-                const x = i % (upsample_factor * 28);
-
-                if (y < margins.top)
-                    margins.top = y;
-
-                if (y > margins.bottom)
-                    margins.bottom = y;
-
-                if (x < margins.left)
-                    margins.left = x;
-
-                if (x > margins.right)
-                    margins.right = x;
-
-                weighted_center.y += pixel_brightness * @as(f32, @floatFromInt(y));
-                weighted_center.x += pixel_brightness * @as(f32, @floatFromInt(x));
-                weight_sum += pixel_brightness;
-            }
-
-            if (is_image_empty)
-                break :blk;
-
-            weighted_center.x /= weight_sum;
-            weighted_center.y /= weight_sum;
-
-            //cropAndCenterAndResizeInputImage();
+            margin = getImageMargin(input_image);
+            if (margin.top < margin.bottom) // Check if margin is valid (i.e., image isn't blank)
+                cropAndResizeInputImage(input_image, margin, classifier.input.value.entries);
 
             classifier.operate();
         }
 
-        drawInputImage(input_image, margins);
+        drawInputImage(input_image, margin);
+        drawDownsampledImage(classifier.input.value.entries);
 
         for (classifier.output.value.entries, 0..) |*entry, i| {
             _ = c.GuiProgressBar(.{
@@ -128,7 +105,7 @@ fn updateInputImage(data: []f32) bool {
         const i = @divFloor(mouse_position.y, pixel_size);
         const j = @divFloor(mouse_position.x, pixel_size);
 
-        const radius = 4;
+        const radius = 5;
 
         const offsets = comptime blk: {
             var ret: [2 * radius - 1]f32 = undefined;
@@ -162,17 +139,58 @@ fn updateInputImage(data: []f32) bool {
     return false;
 }
 
-//fn cropAndCenterAndResizeInputImage() !void {
-//}
+fn getImageMargin(data: []const f32) Margin {
+    var ret = largest_invalid_margin;
 
-fn drawInputImage(data: []const f32, margins: Margins) void {
+    for (0..upsample_factor * 28) |i| {
+        for (0..upsample_factor * 28) |j| {
+            if (data[upsample_factor * 28 * i + j] == 0)
+                continue;
+
+            if (i < ret.top)
+                ret.top = i;
+
+            if (i > ret.bottom)
+                ret.bottom = i;
+
+            if (j < ret.left)
+                ret.left = j;
+
+            if (j > ret.right)
+                ret.right = j;
+        }
+    }
+
+    return ret;
+}
+
+fn cropAndResizeInputImage(input_data: []const f32, margin: Margin, output_data: []f32) void {
+    const input_height = margin.bottom - margin.top;
+    const input_width = margin.right - margin.left;
+
+    const scale_ratio = 20 / @as(f32, @floatFromInt(@max(input_height, input_width)));
+
+    const output_height: usize = @intFromFloat(@as(f32, @floatFromInt(input_height)) * scale_ratio);
+    const output_width: usize = @intFromFloat(@as(f32, @floatFromInt(input_width)) * scale_ratio);
+
+    for (14 - output_height / 2..14 + output_height / 2, 0..) |output_i, output_i_offset| {
+        for (14 - output_width / 2..14 + output_width / 2, 0..) |output_j, output_j_offset| {
+            const input_i = margin.top + @as(usize, @intFromFloat((@as(f32, @floatFromInt(output_i_offset)) + 0.5) / scale_ratio));
+            const input_j = margin.left + @as(usize, @intFromFloat((@as(f32, @floatFromInt(output_j_offset)) + 0.5) / scale_ratio));
+
+            output_data[28 * output_i + output_j] += input_data[upsample_factor * 28 * input_i + input_j];
+        }
+    }
+}
+
+fn drawInputImage(data: []const f32, margin: Margin) void {
     c.DrawRectangle(0, 0, window_height, window_height, c.BLACK);
 
     for (0..upsample_factor * 28) |i| {
         for (0..upsample_factor * 28) |j| {
             const pixel_brightness: u8 = @intFromFloat(data[upsample_factor * 28 * i + j] * 255);
 
-            if (i >= margins.top and i <= margins.bottom and j >= margins.left and j <= margins.right)
+            if (i >= margin.top and i <= margin.bottom and j >= margin.left and j <= margin.right)
                 c.DrawRectangle(@intCast(pixel_size * j), @intCast(pixel_size * i), pixel_size, pixel_size, c.LIME);
 
             c.DrawRectangle(@intCast(pixel_size * j), @intCast(pixel_size * i), pixel_size, pixel_size, .{
@@ -185,9 +203,17 @@ fn drawInputImage(data: []const f32, margins: Margins) void {
     }
 }
 
-const Margins = struct {
-    top: usize,
-    bottom: usize,
-    left: usize,
-    right: usize,
-};
+fn drawDownsampledImage(data: []const f32) void {
+    for (0..28) |i| {
+        for (0..28) |j| {
+            const pixel_brightness: u8 = @intFromFloat(data[28 * i + j] * 255);
+
+            c.DrawRectangle(@intCast(window_height + 2 * pixel_size * (j + 1) / 3), @intCast(pixel_size * 2 * (i + 1) / 3), pixel_size, pixel_size, .{
+                .r = pixel_brightness,
+                .g = pixel_brightness,
+                .b = pixel_brightness,
+                .a = 255,
+            });
+        }
+    }
+}
