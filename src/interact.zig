@@ -68,9 +68,10 @@ pub fn main() !void {
         if (updateInputImage(input_image)) {
             @memset(classifier.input.value.entries, 0);
 
-            margin = getImageMargin(input_image);
+            const weighted_center = updateMarginAndGetWeightedCenterOfImage(input_image, &margin);
+
             if (margin.top < margin.bottom) // Check if margin is valid (i.e., image isn't blank)
-                cropAndResizeInputImage(input_image, margin, classifier.input.value.entries);
+                cropAndCenterAndResizeInputImage(input_image, margin, weighted_center, classifier.input.value.entries);
 
             classifier.operate();
         }
@@ -139,32 +140,42 @@ fn updateInputImage(data: []f32) bool {
     return false;
 }
 
-fn getImageMargin(data: []const f32) Margin {
-    var ret = largest_invalid_margin;
+fn updateMarginAndGetWeightedCenterOfImage(data: []const f32, output_margin: *Margin) c.Vector2 {
+    output_margin.* = largest_invalid_margin;
+
+    var weighted_center = c.Vector2{ .y = 0, .x = 0 };
+    var weight_sum: f32 = 0;
 
     for (0..upsample_factor * 28) |i| {
         for (0..upsample_factor * 28) |j| {
             if (data[upsample_factor * 28 * i + j] == 0)
                 continue;
 
-            if (i < ret.top)
-                ret.top = i;
+            if (i < output_margin.top)
+                output_margin.top = i;
 
-            if (i > ret.bottom)
-                ret.bottom = i;
+            if (i > output_margin.bottom)
+                output_margin.bottom = i;
 
-            if (j < ret.left)
-                ret.left = j;
+            if (j < output_margin.left)
+                output_margin.left = j;
 
-            if (j > ret.right)
-                ret.right = j;
+            if (j > output_margin.right)
+                output_margin.right = j;
+
+            weighted_center.y += data[upsample_factor * 28 * i + j] * @as(f32, @floatFromInt(i));
+            weighted_center.x += data[upsample_factor * 28 * i + j] * @as(f32, @floatFromInt(j));
+            weight_sum += data[upsample_factor * 28 * i + j];
         }
     }
 
-    return ret;
+    weighted_center.y /= weight_sum;
+    weighted_center.x /= weight_sum;
+
+    return weighted_center;
 }
 
-fn cropAndResizeInputImage(input_data: []const f32, margin: Margin, output_data: []f32) void {
+fn cropAndCenterAndResizeInputImage(input_data: []const f32, margin: Margin, weighted_center: c.Vector2, output_data: []f32) void {
     const input_height = margin.bottom - margin.top;
     const input_width = margin.right - margin.left;
 
@@ -173,12 +184,15 @@ fn cropAndResizeInputImage(input_data: []const f32, margin: Margin, output_data:
     const output_height: usize = @intFromFloat(@as(f32, @floatFromInt(input_height)) * scale_ratio);
     const output_width: usize = @intFromFloat(@as(f32, @floatFromInt(input_width)) * scale_ratio);
 
-    for (14 - output_height / 2..14 + output_height / 2, 0..) |output_i, output_i_offset| {
-        for (14 - output_width / 2..14 + output_width / 2, 0..) |output_j, output_j_offset| {
-            const input_i = margin.top + @as(usize, @intFromFloat((@as(f32, @floatFromInt(output_i_offset)) + 0.5) / scale_ratio));
-            const input_j = margin.left + @as(usize, @intFromFloat((@as(f32, @floatFromInt(output_j_offset)) + 0.5) / scale_ratio));
+    const output_center_i_offset: isize = @intFromFloat((@as(f32, @floatFromInt(margin.top + input_height / 2)) - weighted_center.y) * scale_ratio);
+    const output_center_j_offset: isize = @intFromFloat((@as(f32, @floatFromInt(margin.left + input_width / 2)) - weighted_center.x) * scale_ratio);
 
-            output_data[28 * output_i + output_j] += input_data[upsample_factor * 28 * input_i + input_j];
+    for (0..output_height, @intCast(@as(isize, @intCast(14 - output_height / 2)) + std.math.clamp(output_center_i_offset, -4, 4))..) |output_i_index, output_i| {
+        for (0..output_width, @intCast(@as(isize, @intCast(14 - output_width / 2)) + std.math.clamp(output_center_j_offset, -4, 4))..) |output_j_index, output_j| {
+            const input_i = margin.top + @as(usize, @intFromFloat((@as(f32, @floatFromInt(output_i_index)) + 0.5) / scale_ratio));
+            const input_j = margin.left + @as(usize, @intFromFloat((@as(f32, @floatFromInt(output_j_index)) + 0.5) / scale_ratio));
+
+            output_data[28 * output_i + output_j] = input_data[upsample_factor * 28 * input_i + input_j];
         }
     }
 }
