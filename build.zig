@@ -46,8 +46,8 @@ pub fn build(b: *std.Build) void {
         interact.linkSystemLibrary(name);
 
     // Change these to suit your needs
-    const include_path = "/home/tejas/local/include";
-    const library_path = "/home/tejas/local/lib";
+    const include_path = "/home/tejas/.local/include";
+    const library_path = "/home/tejas/.local/lib";
     interact.addIncludePath(std.Build.LazyPath{ .path = include_path });
     interact.addLibraryPath(std.Build.LazyPath{ .path = library_path });
     interact.addRPath(std.Build.LazyPath{ .path = library_path });
