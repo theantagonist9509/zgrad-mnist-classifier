@@ -20,7 +20,9 @@ The model architecture, learning hyperparameters, number of epochs, output path,
 
 ### Interact
 
-This build artifact requires raylib (and raygui.h), GL, and X11.
+This build artifact requires raylib (headers and library), raygui.h, libGL, and libX11.
+
+https://github.com/theantagonist9509/zgrad-mnist-classifier/blob/436c487dd4883969a668aed4b1d48c1352a48a52/build.zig#L37-L53
 
 To interact with the model, run `zig build interact`. This will open an interactive window with a paint tool and a bar chart of the model's (`classifier` by default) predictions.
 
