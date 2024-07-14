@@ -68,7 +68,7 @@ pub fn main() !void {
         if (updateInputImage(input_image)) {
             @memset(classifier.input.value.entries, 0);
 
-            const weighted_center = updateMarginAndGetWeightedCenterOfImage(input_image, &margin);
+            const weighted_center = updateMarginAndGetWeightedCenterOfInputImage(input_image, &margin);
 
             if (margin.top < margin.bottom) // Check if margin is valid (i.e., image isn't blank)
                 cropAndCenterAndResizeInputImage(input_image, margin, weighted_center, classifier.input.value.entries);
@@ -140,7 +140,7 @@ fn updateInputImage(data: []f32) bool {
     return false;
 }
 
-fn updateMarginAndGetWeightedCenterOfImage(data: []const f32, output_margin: *Margin) c.Vector2 {
+fn updateMarginAndGetWeightedCenterOfInputImage(data: []const f32, output_margin: *Margin) c.Vector2 {
     output_margin.* = largest_invalid_margin;
 
     var weighted_center = c.Vector2{ .y = 0, .x = 0 };
