@@ -1,6 +1,6 @@
 # MNIST Classifier
 
-From scratch, in Zig
+MNIST classifier implemented and trained from scratch in Zig
 
 ![interact.gif](https://github.com/theantagonist9509/zgrad-mnist-classifier/blob/main/interact.gif)
 
@@ -16,7 +16,7 @@ To train a model, run `zig build train`. This will train a model and serialize i
 
 The model architecture, learning hyperparameters, number of epochs, output path, etc. can be configured in `src/train.zig`.
 
-**If there already exists a file at the model output path, then it will be loaded and fine-tuned instead of training from scratch.**
+**If there already exists a file at the model output path, then it will be loaded and fine-tuned instead of being trained from scratch.**
 
 ### Interact
 
